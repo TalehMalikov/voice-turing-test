@@ -9,8 +9,10 @@ import os
 import random
 import re
 import secrets
+import wave
 from pathlib import Path
 
+import numpy as np
 import requests
 from flask import Flask, abort, g, jsonify, request, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -101,7 +103,7 @@ def session_name():
 
 
 def load_state():
-    s = {"sentences": DEFAULT_SENTENCES, "extra": DEFAULT_EXTRA, "voice_id": None, "order": {}, "generations": 0}
+    s = {"sentences": DEFAULT_SENTENCES, "extra": DEFAULT_EXTRA, "voice_id": None, "order": {}, "generations": 0, "pitches": {}}
     state_file = g.dir / "state.json"
     if state_file.exists():
         s.update(json.loads(state_file.read_text()))
@@ -129,6 +131,48 @@ def active_clones():
         except ValueError:
             pass
     return n
+
+
+FEMALE_PITCH_HZ = 165   # typical speaking pitch: men sit below this, women above
+
+
+def median_pitch(path):
+    """Median pitch in Hz of the voiced parts of a 16-bit WAV file, or 0 if there isn't a clear one."""
+    with wave.open(str(path)) as w:
+        sr, channels = w.getframerate(), w.getnchannels()
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    x = x[::channels]
+    step = max(1, round(sr / 8000))                  # work at about 8 kHz, it's plenty
+    rate = sr / step
+    d = x[: len(x) // step * step].reshape(-1, step).mean(axis=1)
+    win, hop = int(rate * 0.04), int(rate * 0.02)
+    min_lag, max_lag = int(rate / 400), int(rate / 70)
+    count = max_lag + 2 - min_lag
+    found = []
+    for s in range(0, len(d) - win - max_lag - 2, hop):
+        a = d[s:s + win]
+        e0 = float(a @ a)
+        if e0 / win < 1e-4:                          # too quiet: a pause or a breath
+            continue
+        windows = np.lib.stride_tricks.sliding_window_view(d[s + min_lag: s + min_lag + count + win - 1], win)
+        r = (windows @ a) / np.sqrt(e0 * (windows ** 2).sum(axis=1) + 1e-9)
+        best = r[:-1].max()
+        if best < 0.6:                               # not clearly a voiced sound
+            continue
+        for k in range(1, count - 1):                # first strong peak avoids octave errors
+            if r[k] >= 0.9 * best and r[k] >= r[k - 1] and r[k] >= r[k + 1]:
+                found.append(rate / (min_lag + k))
+                break
+    return float(np.median(found)) if len(found) >= 5 else 0.0
+
+
+def detect_gender(s):
+    """Guess male or female from the median pitch across the visitor's recordings."""
+    pitches = sorted(s["pitches"].values())
+    if not pitches:
+        return None
+    median = pitches[len(pitches) // 2]
+    return {"gender": "female" if median >= FEMALE_PITCH_HZ else "male", "pitch": round(median)}
 
 
 def check(resp):
@@ -167,6 +211,7 @@ def state():
         has_fake=has_fake,
         ready=ready,
         session=session_name(),
+        detected=detect_gender(s),
         has_voice=bool(s["voice_id"]),
         has_key=bool(os.environ.get("ELEVENLABS_API_KEY")),
     )
@@ -189,6 +234,7 @@ def set_sentences():
     if sentences != s["sentences"]:                  # recordings only match the old text
         for f in g.dir.glob("real_*.wav"):
             f.unlink()
+        s["pitches"] = {}
     for f in g.dir.glob("*_*.mp3"):                  # generated clips have to be redone
         f.unlink()
     s.update(sentences=sentences, extra=extra, order={})
@@ -203,6 +249,14 @@ def upload_real(i):
         abort(404)
     g.dir.mkdir(parents=True, exist_ok=True)
     request.files["audio"].save(real_path(i))
+    try:
+        pitch = median_pitch(real_path(i))
+    except (wave.Error, EOFError, ValueError):       # not a readable recording: skip the guess
+        pitch = 0
+    if pitch:
+        s["pitches"][str(i)] = round(pitch, 1)
+    else:
+        s["pitches"].pop(str(i), None)
     save_state(s)                       # also refreshes the folder's "last used" time
     return jsonify(ok=True)
 
@@ -329,6 +383,7 @@ def delete_recordings():
     for f in g.dir.glob("real_*.wav"):
         f.unlink()
     s = load_state()
+    s["pitches"] = {}
     s["order"] = {}     # the test needs the real clips, so it has to be set up again
     save_state(s)
     return jsonify(ok=True)

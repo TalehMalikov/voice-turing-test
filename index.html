@@ -136,6 +136,7 @@
     <div class="head"><span class="num">2</span><h2>Record your voice</h2></div>
     <p class="note">Read each sentence naturally. These recordings are also what the clone learns from.</p>
     <div id="recordList"></div>
+    <p id="detected" class="note" style="margin:.7rem 0 0"></p>
   </section>
 
   <section class="card">
@@ -203,6 +204,9 @@ async function refresh() {
   clipCache = {};                       // clips may have been regenerated
   if (!S.has_key) msg("No ELEVENLABS_API_KEY found. Add it to the .env file and restart.");
   $("session").textContent = S.session;
+  $("detected").textContent = S.detected
+    ? `Detected voice: ${S.detected.gender} (pitch about ${S.detected.pitch} Hz).`
+    : "";
   $("sentences").value = S.sentences.join("\n");
   $("extra").value = S.extra.join("\n");
   renderRecordList();

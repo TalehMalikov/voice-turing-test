@@ -1,6 +1,8 @@
 """Checks the server without calling ElevenLabs (the network calls are faked)."""
 import io
+import wave
 
+import numpy as np
 import pytest
 
 import app as A
@@ -116,3 +118,33 @@ def test_delete_buttons(env):
     assert not s["ready"] and not any(s["has_real"]) and s["has_voice"]
     c.post("/api/delete-clone")
     assert not c.get("/api/state").json["has_voice"]
+
+
+def voice_wav(f0, sr=48000, seconds=3):
+    """A made-up 'voice': harmonics of f0 with a little vibrato and a pause in the middle."""
+    t = np.arange(sr * seconds) / sr
+    phase = 2 * np.pi * f0 * (t - 0.04 / (2 * np.pi * 5) * np.cos(2 * np.pi * 5 * t))
+    x = sum(np.sin(h * phase) / h for h in range(1, 9)) * 0.2
+    x[(t > 1.2) & (t < 1.6)] = 0
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((x * 32767).astype(np.int16).tobytes())
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("f0, gender", [(105, "male"), (130, "male"), (210, "female"), (250, "female")])
+def test_gender_is_detected_from_pitch(env, f0, gender):
+    c = env.client()
+    c.post("/api/real/0", content_type="multipart/form-data",
+           data={"audio": (io.BytesIO(voice_wav(f0)), "r.wav")})
+    found = c.get("/api/state").json["detected"]
+    assert found["gender"] == gender and abs(found["pitch"] - f0) < 8
+
+
+def test_no_guess_without_a_readable_recording(env):
+    c = env.client()
+    upload(c, 0)                                               # "x" is not a real WAV file
+    assert c.get("/api/state").json["detected"] is None
