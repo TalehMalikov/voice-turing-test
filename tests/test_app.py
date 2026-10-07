@@ -103,6 +103,13 @@ def test_editing_only_the_new_sentences_keeps_recordings(env):
     assert s["has_real"] == [True] * N and s["extra"] == ["A brand new line."] and not s["ready"]
 
 
+def test_saving_without_new_sentences_keeps_the_existing_ones(env):
+    c = env.client()
+    before = c.get("/api/state").json
+    assert c.post("/api/sentences", json={"sentences": before["sentences"]}).status_code == 200
+    assert c.get("/api/state").json["extra"] == before["extra"] != []
+
+
 def test_forged_cookie_is_ignored(env, tmp_path):
     c = env.client()
     r = c.get("/api/state", headers={"Cookie": "vtt_sid=../../etc"})

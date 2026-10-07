@@ -29,7 +29,36 @@
   header { text-align: center; margin-bottom: 1.8rem; }
   h1 { font-size: 2rem; margin: 0 0 .3rem; letter-spacing: -.02em; }
   header p { margin: 0; color: var(--muted); }
-  header p.session { margin-top: .6rem; font-size: .88rem; }
+
+  /* the robot that heckles you */
+  .stage { display: flex; align-items: center; justify-content: center; gap: 1.1rem; margin: 1.2rem 0 .9rem; }
+  .robot { width: 92px; flex: none; animation: bob 3s ease-in-out infinite; }
+  .robot .eyes, .robot .mouth { transform-box: fill-box; transform-origin: center; }
+  .robot .eyes { animation: blink 5s infinite; }
+  .robot.talking .mouth { animation: talk .26s infinite alternate; }
+  .robot .bulb { animation: pulse 1.6s ease-in-out infinite; }
+  .bubble {
+    position: relative; width: 320px; max-width: 100%; min-height: 3.6rem; text-align: left;
+    padding: .8rem 1rem; font-weight: 600; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 2px 10px rgba(43, 134, 209, .07);
+  }
+  .bubble::before {
+    content: ""; position: absolute; left: -8px; top: 50%; width: 14px; height: 14px;
+    background: var(--card); border-left: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    transform: translateY(-50%) rotate(45deg);
+  }
+  .caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -2px;
+    background: var(--blue); animation: caret 1s steps(1) infinite; }
+  @keyframes bob { 50% { transform: translateY(-5px); } }
+  @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
+  @keyframes talk { to { transform: scaleY(2.2); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes caret { 50% { opacity: 0; } }
+  @media (max-width: 540px) {
+    .stage { flex-direction: column; }
+    .bubble::before { left: 50%; top: -8px; transform: translateX(-50%) rotate(135deg); }
+  }
+  @media (prefers-reduced-motion: reduce) { .robot, .robot *, .caret { animation: none !important; } }
 
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
@@ -120,8 +149,22 @@
 <main>
   <header>
     <h1>Voice Turing test</h1>
-    <p>Can your room tell your real voice from an AI clone of it?</p>
-    <p class="session">Your session: <b id="session">...</b>. Your recordings and clone are saved on the server for this browser until you delete them below.</p>
+    <div class="stage">
+      <svg class="robot" viewBox="0 0 120 130" aria-hidden="true">
+        <line x1="60" y1="10" x2="60" y2="24" stroke="#2b86d1" stroke-width="4" stroke-linecap="round"/>
+        <circle class="bulb" cx="60" cy="9" r="6" fill="#ffb347"/>
+        <rect x="8" y="46" width="10" height="20" rx="5" fill="#2b86d1"/>
+        <rect x="102" y="46" width="10" height="20" rx="5" fill="#2b86d1"/>
+        <rect x="18" y="24" width="84" height="64" rx="18" fill="#fff" stroke="#2b86d1" stroke-width="4"/>
+        <g class="eyes">
+          <circle cx="43" cy="51" r="8" fill="#17324d"/><circle cx="77" cy="51" r="8" fill="#17324d"/>
+          <circle cx="45.5" cy="48.5" r="2.5" fill="#fff"/><circle cx="79.5" cy="48.5" r="2.5" fill="#fff"/>
+        </g>
+        <path class="mouth" d="M42 76 Q62 85 80 70" fill="none" stroke="#2b86d1" stroke-width="5" stroke-linecap="round"/>
+        <rect x="38" y="96" width="44" height="28" rx="10" fill="#e3f1fc" stroke="#2b86d1" stroke-width="4"/>
+      </svg>
+      <div class="bubble"><span id="say"></span><i class="caret"></i></div>
+    </div>
   </header>
 
   <div id="msg"></div>
@@ -129,7 +172,7 @@
   <section class="card">
     <div class="head"><span class="num">1</span><h2>Sentences</h2></div>
     <p class="note">Sentences you will record, one per line. They also teach the clone your voice. Changing them clears your recordings.</p>
-    <textarea id="sentences" rows="3"></textarea>
+    <textarea id="sentences" rows="7"></textarea>
     <p class="note" style="margin-top:.9rem">New sentences for the test, one per line. You won't record these: the test plays only AI versions, saying things you never said.</p>
     <textarea id="extra" rows="3"></textarea>
     <div class="actions"><button id="saveSentences">Save sentences</button></div>
@@ -206,7 +249,6 @@ async function refresh() {
   S = await api("/api/state");
   clipCache = {};                       // clips may have been regenerated
   if (!S.has_key) msg("No ELEVENLABS_API_KEY found. Add it to the .env file and restart.");
-  $("session").textContent = S.session;
   $("detected").textContent = S.detected
     ? `Detected voice: ${S.detected.gender} (pitch about ${S.detected.pitch} Hz).`
     : "";
@@ -417,6 +459,26 @@ function mark(ok) {
 $("roomRight").onclick = () => mark(true);
 $("roomWrong").onclick = () => mark(false);
 $("next").onclick = () => { q = (q + 1) % rounds().length; showQuestion(); };
+
+// ---- the robot ---------------------------------------------------------
+(async function robot() {
+  const lines = [
+    "Hello, human. I learned your voice in under a minute.",
+    "Think you can hear the difference?",
+    "I can say anything in your voice. Anything.",
+    "Go on. Pick the real you. I dare you.",
+  ];
+  const say = $("say"), bot = document.querySelector(".robot");
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { say.textContent = lines[0]; return; }
+  for (let n = 0; ; n++) {
+    const text = lines[n % lines.length];
+    bot.classList.add("talking");
+    for (let i = 1; i <= text.length; i++) { say.textContent = text.slice(0, i); await sleep(32); }
+    bot.classList.remove("talking");
+    await sleep(2600);
+  }
+})();
 
 refresh().catch(e => msg(e.message));
 </script>

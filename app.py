@@ -220,8 +220,10 @@ def state():
 @app.post("/api/sentences")
 def set_sentences():
     clean = lambda items: [x.strip() for x in items if x.strip()]
+    s = load_state()
     sentences = clean(request.json["sentences"])
-    extra = clean(request.json.get("extra", []))
+    # If the page didn't send the new sentences (an older cached page), keep the ones we have.
+    extra = clean(request.json["extra"]) if "extra" in request.json else s["extra"]
     if not sentences:
         abort(400, "Need at least one sentence to record.")
     if len(sentences) > MAX_SENTENCES:
@@ -230,7 +232,6 @@ def set_sentences():
         abort(400, f"Use at most {MAX_EXTRA} new sentences.")
     if any(len(x) > MAX_SENTENCE_CHARS for x in sentences + extra):
         abort(400, f"Keep each sentence under {MAX_SENTENCE_CHARS} characters.")
-    s = load_state()
     if sentences != s["sentences"]:                  # recordings only match the old text
         for f in g.dir.glob("real_*.wav"):
             f.unlink()
