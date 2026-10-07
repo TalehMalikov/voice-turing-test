@@ -399,8 +399,10 @@ function showQuestion() {
   updateScore();
 }
 
-// Real recordings and ElevenLabs audio come out at different volumes, so every clip is
-// played at the same loudness. That way volume can't give the answer away.
+// Real recordings and ElevenLabs audio differ in volume and in how much silence they have at
+// the start and end (you pause before speaking, the AI starts at once). So every clip is
+// played at the same loudness, from just before the first word to just after the last one.
+// That way neither volume nor a head start can give the answer away.
 const TARGET_RMS = 0.08;
 let clipCache = {}, ctx = null, source = null;
 
@@ -413,7 +415,23 @@ async function loadClip(url) {
     let sum = 0, n = 0;                                  // loudness of the speech, ignoring pauses
     for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) > 0.05 * peak) { sum += x[i] * x[i]; n++; }
     const rms = Math.sqrt(sum / (n || 1)) || 1e-4;
-    clipCache[url] = {buffer, gain: Math.min(TARGET_RMS / rms, 0.95 / (peak || 1))};
+
+    // where the speech starts and ends, judged against the loudest part of this clip
+    const sr = buffer.sampleRate, frame = Math.round(sr * 0.02), level = [];
+    for (let i = 0; i + frame <= x.length; i += frame) {
+      let s = 0;
+      for (let j = 0; j < frame; j++) s += x[i + j] * x[i + j];
+      level.push(Math.sqrt(s / frame));
+    }
+    const top = level.reduce((m, v) => Math.max(m, v), 0);
+    const speech = level.map(v => v > 0.015 * top);                // within 36 dB of the loudest part
+    const first = speech.indexOf(true), last = speech.lastIndexOf(true);
+    const lead = 0.15;                                             // same short margin for every clip
+    const start = first < 0 ? 0 : Math.max(0, first * frame / sr - lead);
+    const end = first < 0 ? buffer.duration : Math.min(buffer.duration, (last + 1) * frame / sr + lead);
+
+    const wait = first < 0 ? 0 : Math.max(0, lead - (first * frame / sr - start));   // top up a clip that begins too soon
+    clipCache[url] = {buffer, start, wait, length: end - start, gain: Math.min(TARGET_RMS / rms, 0.95 / (peak || 1))};
   }
   return clipCache[url];
 }
@@ -422,10 +440,10 @@ async function play(slot) {
   if (source) { try { source.stop(); } catch (e) {} }
   ctx = ctx || new AudioContext();
   await ctx.resume();
-  const {buffer, gain} = await loadClip(`/clip/${q}/${slot}`);
+  const {buffer, start, wait, length, gain} = await loadClip(`/clip/${q}/${slot}`);
   const volume = ctx.createGain(); volume.gain.value = gain;
   source = ctx.createBufferSource(); source.buffer = buffer;
-  source.connect(volume).connect(ctx.destination); source.start();
+  source.connect(volume).connect(ctx.destination); source.start(ctx.currentTime + wait, start, length);
 }
 for (let k = 0; k < 4; k++) $(`play${k}`).onclick = () => play(k);
 
