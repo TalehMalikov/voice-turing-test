@@ -229,12 +229,21 @@ async function toWav(blob) {
   const a = 1 / (1 + 2 * Math.PI * 100 / sr);
   const hp = new Float32Array(raw.length);
   for (let i = 1; i < raw.length; i++) hp[i] = a * (hp[i - 1] + raw[i] - raw[i - 1]);
-  // trim silence (and the breath before speaking) at both ends, keep 0.15 s of padding
-  let s0 = 0, e0 = hp.length - 1;
-  while (s0 < e0 && Math.abs(hp[s0]) < 0.03) s0++;
-  while (e0 > s0 && Math.abs(hp[e0]) < 0.03) e0--;
-  const pad = Math.round(0.15 * sr);
-  const data = hp.slice(Math.max(0, s0 - pad), Math.min(hp.length, e0 + pad));
+  // Trim only the dead air before the first word and after the last one. "Quiet" is judged
+  // against the loudest part of this recording (not a fixed level), and a generous margin is
+  // kept, so soft word endings are never cut off.
+  const frame = Math.round(sr * 0.02), level = [];
+  for (let i = 0; i + frame <= hp.length; i += frame) {
+    let sum = 0;
+    for (let j = 0; j < frame; j++) sum += hp[i + j] * hp[i + j];
+    level.push(Math.sqrt(sum / frame));
+  }
+  const top = level.reduce((m, v) => Math.max(m, v), 0);
+  const speech = level.map(v => v > 0.02 * top);                  // within 34 dB of the loudest part
+  const first = speech.indexOf(true), last = speech.lastIndexOf(true);
+  const pad = Math.round(0.4 * sr);
+  const data = first < 0 ? hp
+    : hp.slice(Math.max(0, first * frame - pad), Math.min(hp.length, (last + 1) * frame + pad));
   const out = new DataView(new ArrayBuffer(44 + data.length * 2));
   const str = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
   str(0, "RIFF"); out.setUint32(4, 36 + data.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
