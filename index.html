@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Turing test</title>
+<style>
+  :root {
+    --bg: #eaf4fc;
+    --card: #ffffff;
+    --line: #d4e6f6;
+    --soft: #e3f1fc;
+    --soft-hover: #d3e8f9;
+    --blue: #2b86d1;
+    --blue-dark: #1f6cb0;
+    --ink: #17324d;
+    --muted: #5d7893;
+    --red: #d9534f;
+    --green: #2f9e6e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1rem 4rem;
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 1.8rem; }
+  h1 { font-size: 2rem; margin: 0 0 .3rem; letter-spacing: -.02em; }
+  header p { margin: 0; color: var(--muted); }
+  header p.session { margin-top: .6rem; font-size: .88rem; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 1.3rem 1.4rem; margin-bottom: 1rem;
+    box-shadow: 0 2px 10px rgba(43, 134, 209, .07);
+  }
+  .head { display: flex; align-items: center; gap: .7rem; margin-bottom: .4rem; }
+  .num {
+    width: 1.9rem; height: 1.9rem; border-radius: 50%; flex: none;
+    background: var(--blue); color: #fff; font-weight: 600; font-size: .95rem;
+    display: grid; place-items: center;
+  }
+  h2 { font-size: 1.1rem; margin: 0; }
+  .note { color: var(--muted); font-size: .93rem; margin: 0 0 .9rem; }
+
+  button {
+    font: inherit; font-weight: 600; font-size: .95rem;
+    padding: .5rem 1rem; border-radius: 10px; border: 0; cursor: pointer;
+    background: var(--soft); color: var(--blue-dark); transition: background .12s;
+  }
+  button:hover { background: var(--soft-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--blue); color: #fff; }
+  button.primary:hover { background: var(--blue-dark); }
+  button.recording { background: var(--red); color: #fff; }
+  button.danger { background: #fdeceb; color: #b3403c; }
+  button.danger:hover { background: #fadad8; }
+  .actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .9rem; }
+
+  textarea {
+    width: 100%; font: inherit; color: var(--ink); resize: vertical;
+    padding: .7rem .85rem; border: 1px solid var(--line); border-radius: 10px;
+    background: #f7fbff;
+  }
+  select {
+    font: inherit; color: var(--ink); padding: .2rem .5rem;
+    border: 1px solid var(--line); border-radius: 8px; background: #f7fbff;
+  }
+  textarea:focus { outline: 2px solid #9fcdf2; border-color: transparent; }
+
+  .row {
+    display: flex; align-items: center; gap: .8rem;
+    padding: .65rem .8rem; margin-bottom: .45rem;
+    background: #f7fbff; border: 1px solid var(--line); border-radius: 10px;
+  }
+  .row .text { flex: 1; }
+  .pill {
+    font-size: .8rem; font-weight: 600; padding: .15rem .6rem; border-radius: 999px;
+    background: var(--soft); color: var(--muted); white-space: nowrap;
+  }
+  .pill.ok { background: #dff3ea; color: var(--green); }
+  .pill.live { background: #fdeceb; color: var(--red); }
+
+  #msg {
+    display: none; margin-bottom: 1rem; padding: .7rem 1rem; border-radius: 10px;
+    background: #fdeceb; color: #a8322e; font-size: .93rem;
+  }
+  #cloneStatus { margin: .9rem 0 0; }
+
+  /* the test */
+  .prompt {
+    text-align: center; font-size: 1.25rem; line-height: 1.4;
+    padding: 1rem .5rem 1.2rem; font-weight: 500;
+  }
+  .prompt small { display: block; color: var(--muted); font-size: .85rem; font-weight: 400; margin-bottom: .4rem; }
+  .ab { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  .ab button {
+    padding: 1.4rem 1rem; font-size: 1.05rem; border: 2px solid transparent;
+  }
+  .ab button span { display: block; font-size: .8rem; font-weight: 500; margin-top: .2rem; color: var(--muted); }
+  .ab button.b { background: #fff0df; color: #b5651d; }
+  .ab button.b:hover { background: #ffe5c8; }
+  .ab button.c { background: #efe9fb; color: #6b4db0; }
+  .ab button.c:hover { background: #e3d9f7; }
+  .ab button.d { background: #fff6cf; color: #8a6d00; }
+  .ab button.d:hover { background: #ffefa8; }
+  .ab button.real { border-color: var(--green); background: #dff3ea; color: var(--green); }
+  .ab button.real span { color: var(--green); }
+  #result { text-align: center; min-height: 1.6rem; margin-top: .9rem; font-weight: 600; }
+  .controls { display: flex; justify-content: center; gap: .6rem; flex-wrap: wrap; margin-top: .9rem; }
+  #score { text-align: center; margin: 1rem 0 0; color: var(--muted); font-size: .93rem; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 1.1rem 0 0; }
+
+  .locked { color: var(--muted); font-size: .93rem; margin: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Voice Turing test</h1>
+    <p>Can your room tell your real voice from an AI clone of it?</p>
+    <p class="session">Your session: <b id="session">...</b>. Your recordings and clone are saved on the server for this browser until you delete them below.</p>
+  </header>
+
+  <div id="msg"></div>
+
+  <section class="card">
+    <div class="head"><span class="num">1</span><h2>Sentences</h2></div>
+    <p class="note">One per line. Changing these clears your recordings.</p>
+    <textarea id="sentences" rows="5"></textarea>
+    <div class="actions"><button id="saveSentences">Save sentences</button></div>
+  </section>
+
+  <section class="card">
+    <div class="head"><span class="num">2</span><h2>Record your voice</h2></div>
+    <p class="note">Read each sentence naturally. These recordings are also what the clone learns from.</p>
+    <div id="recordList"></div>
+    <p id="detected" class="note" style="margin:.7rem 0 0"></p>
+  </section>
+
+  <section class="card">
+    <div class="head"><span class="num">3</span><h2>Clone and generate</h2></div>
+    <p class="note">First clone your voice, then generate the fake clips.</p>
+    <p class="note">The two stock AI voices should be:
+      <select id="gender">
+        <option value="auto">matched to my voice</option>
+        <option value="male">male</option>
+        <option value="female">female</option>
+      </select>
+    </p>
+    <div class="actions" style="margin-top:0">
+      <button id="cloneBtn" class="primary">Clone my voice</button>
+      <button id="fakesBtn" class="primary">Generate fake clips</button>
+    </div>
+    <p id="cloneStatus" class="note"></p>
+  </section>
+
+  <section class="card">
+    <div class="head"><span class="num">4</span><h2>Run the test</h2></div>
+    <p id="quizLocked" class="locked">Finish steps 2 and 3 first.</p>
+    <div id="quiz" hidden>
+      <div class="prompt" id="quizText"></div>
+      <div class="ab">
+        <button id="play0">Play A</button>
+        <button id="play1" class="b">Play B</button>
+        <button id="play2" class="c">Play C</button>
+        <button id="play3" class="d">Play D</button>
+      </div>
+      <div id="result"></div>
+      <div class="controls">
+        <button id="reveal" class="primary">Reveal</button>
+        <button id="next">Next sentence</button>
+      </div>
+      <hr>
+      <div class="controls">
+        <button id="roomRight">Room got it right</button>
+        <button id="roomWrong">Room got it wrong</button>
+      </div>
+      <p id="score"></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="head"><h2>Clean up</h2></div>
+    <p class="note">Remove the AI side (the clone on ElevenLabs and the generated clips), or your own recordings.</p>
+    <div class="actions" style="margin-top:0">
+      <button id="delCloneBtn" class="danger">Delete clone and fake clips</button>
+      <button id="delRecBtn" class="danger">Delete my recordings</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function msg(t) { $("msg").textContent = t || ""; $("msg").style.display = t ? "block" : "none"; }
+let S = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const post = (path, body) => api(path, {
+  method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})
+});
+
+async function refresh() {
+  S = await api("/api/state");
+  if (!S.has_key) msg("No ELEVENLABS_API_KEY found. Add it to the .env file and restart.");
+  $("session").textContent = S.session;
+  $("detected").textContent = S.detected
+    ? `Detected voice: ${S.detected.gender} (pitch about ${S.detected.pitch} Hz). Not right? Change it in step 3.`
+    : "";
+  $("sentences").value = S.sentences.join("\n");
+  renderRecordList();
+  const ready = S.ready;
+  applyButtons();
+  $("quiz").hidden = !ready;
+  $("quizLocked").hidden = ready;
+  $("cloneStatus").textContent =
+    (S.has_voice ? "Voice cloned. " : "No clone yet. ") + (ready ? "Fake clips ready." : "");
+  if (ready) showQuestion();
+}
+
+// ---- recording -------------------------------------------------------
+async function toWav(blob) {
+  const ctx = new AudioContext();
+  const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const raw = audio.getChannelData(0), sr = audio.sampleRate;
+  // cut low rumble (breath thumps, desk noise) below ~100 Hz
+  const a = 1 / (1 + 2 * Math.PI * 100 / sr);
+  const hp = new Float32Array(raw.length);
+  for (let i = 1; i < raw.length; i++) hp[i] = a * (hp[i - 1] + raw[i] - raw[i - 1]);
+  // trim silence (and the breath before speaking) at both ends, keep 0.15 s of padding
+  let s0 = 0, e0 = hp.length - 1;
+  while (s0 < e0 && Math.abs(hp[s0]) < 0.03) s0++;
+  while (e0 > s0 && Math.abs(hp[e0]) < 0.03) e0--;
+  const pad = Math.round(0.15 * sr);
+  const data = hp.slice(Math.max(0, s0 - pad), Math.min(hp.length, e0 + pad));
+  const out = new DataView(new ArrayBuffer(44 + data.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); out.setUint32(4, 36 + data.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, sr, true); out.setUint32(28, sr * 2, true);
+  out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+  str(36, "data"); out.setUint32(40, data.length * 2, true);
+  data.forEach((v, i) => {
+    const x = Math.max(-1, Math.min(1, v));
+    out.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  });
+  return {blob: new Blob([out], {type: "audio/wav"}), pitch: estimatePitch(data, sr)};
+}
+
+// Median pitch (Hz) of the voiced parts, by autocorrelation. Men sit near 85-180 Hz, women near 165-255 Hz.
+function estimatePitch(x, sr) {
+  const f = Math.max(1, Math.round(sr / 8000)), rate = sr / f;      // work at about 8 kHz, it's plenty
+  const d = new Float32Array(Math.floor(x.length / f));
+  for (let i = 0; i < d.length; i++) {
+    let t = 0; for (let j = 0; j < f; j++) t += x[i * f + j];
+    d[i] = t / f;
+  }
+  const win = Math.round(rate * 0.04), hop = Math.round(rate * 0.02);
+  const minLag = Math.floor(rate / 400), maxLag = Math.floor(rate / 70);
+  const r = new Float32Array(maxLag + 2), found = [];
+  for (let s = 0; s + win + maxLag + 1 < d.length; s += hop) {
+    let e0 = 0; for (let i = 0; i < win; i++) e0 += d[s + i] * d[s + i];
+    if (e0 / win < 1e-4) continue;                                   // too quiet: pause or breath
+    let best = 0;
+    for (let lag = minLag; lag <= maxLag + 1; lag++) {
+      let c = 0, e1 = 0;
+      for (let i = 0; i < win; i++) { c += d[s + i] * d[s + i + lag]; e1 += d[s + i + lag] ** 2; }
+      r[lag] = c / Math.sqrt(e0 * e1 + 1e-9);
+      if (lag <= maxLag && r[lag] > best) best = r[lag];
+    }
+    if (best < 0.6) continue;                                        // not clearly voiced
+    for (let lag = minLag + 1; lag <= maxLag; lag++) {               // first strong peak avoids octave errors
+      if (r[lag] >= 0.9 * best && r[lag] >= r[lag - 1] && r[lag] >= r[lag + 1]) { found.push(rate / lag); break; }
+    }
+  }
+  if (found.length < 5) return 0;
+  found.sort((a, b) => a - b);
+  return found[Math.floor(found.length / 2)];
+}
+
+let recorder = null;
+async function toggleRecord(i, btn, pill) {
+  if (recorder) { recorder.stop(); return; }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {channelCount: 1, noiseSuppression: true, echoCancellation: true, autoGainControl: true}
+  });
+  const chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    recorder = null;
+    pill.textContent = "saving..."; pill.className = "pill";
+    try {
+      const {blob: wav, pitch} = await toWav(new Blob(chunks));
+      const form = new FormData();
+      form.append("audio", wav, `real_${i}.wav`);
+      form.append("pitch", pitch);
+      await api(`/api/real/${i}`, {method: "POST", body: form});
+      await refresh();
+    } catch (e) { msg(e.message); }
+  };
+  recorder.start();
+  btn.textContent = "Stop"; btn.classList.add("recording");
+  pill.textContent = "recording"; pill.className = "pill live";
+}
+
+function renderRecordList() {
+  const box = $("recordList"); box.innerHTML = "";
+  S.sentences.forEach((text, i) => {
+    const row = document.createElement("div"); row.className = "row";
+    const t = document.createElement("span"); t.className = "text"; t.textContent = text;
+    const pill = document.createElement("span");
+    pill.className = "pill" + (S.has_real[i] ? " ok" : "");
+    pill.textContent = S.has_real[i] ? "recorded" : "not yet";
+    const b = document.createElement("button");
+    b.textContent = S.has_real[i] ? "Re-record" : "Record";
+    b.onclick = () => toggleRecord(i, b, pill).catch(e => msg(e.message));
+    row.append(t, pill, b); box.append(row);
+  });
+}
+
+// ---- steps -----------------------------------------------------------
+async function run(btn, label, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = label; msg();
+  try { await fn(); await refresh(); } catch (e) { msg(e.message); }
+  btn.disabled = false; btn.textContent = old;
+  if (S) applyButtons();
+}
+
+// Each step unlocks the next: clone -> generate -> test and clean up.
+function applyButtons() {
+  $("cloneBtn").disabled = S.has_voice || !S.has_real.some(Boolean);
+  $("fakesBtn").disabled = !S.has_voice || S.ready || !S.has_real.every(Boolean);
+  $("delCloneBtn").disabled = !S.has_voice;
+  $("delRecBtn").disabled = !S.has_real.some(Boolean);
+}
+$("saveSentences").onclick = e => run(e.target, "Saving...", () =>
+  post("/api/sentences", {sentences: $("sentences").value.split("\n")}));
+$("cloneBtn").onclick = e => run(e.target, "Cloning...", () => post("/api/clone"));
+$("fakesBtn").onclick = e => run(e.target, "Generating...", () =>
+  post("/api/fakes", {gender: $("gender").value}));
+$("delCloneBtn").onclick = e => {
+  if (confirm("Delete your clone from ElevenLabs and all generated clips? Your recordings are kept."))
+    run(e.target, "Deleting...", () => post("/api/delete-clone"));
+};
+$("delRecBtn").onclick = e => {
+  if (confirm("Delete your recordings? The clone and generated clips are kept."))
+    run(e.target, "Deleting...", () => post("/api/delete-recordings"));
+};
+
+// ---- the test --------------------------------------------------------
+let q = 0, right = 0, wrong = 0, audio = null, scored = false;
+const LETTERS = ["A", "B", "C", "D"];
+
+function updateScore() { $("score").textContent = `Room score: ${right} right, ${wrong} wrong`; }
+
+function showQuestion() {
+  $("quizText").innerHTML = "";
+  const small = document.createElement("small");
+  small.textContent = `Sentence ${q + 1} of ${S.sentences.length} — which one is the real you?`;
+  $("quizText").append(small, `“${S.sentences[q]}”`);
+  $("result").textContent = ""; scored = false;
+  for (let k = 0; k < 4; k++) {
+    $(`play${k}`).classList.remove("real");
+    $(`play${k}`).innerHTML = `Play ${LETTERS[k]}`;
+  }
+  updateScore();
+}
+
+function play(slot) {
+  if (audio) audio.pause();
+  audio = new Audio(`/clip/${q}/${slot}?t=${Date.now()}`); audio.play();
+}
+for (let k = 0; k < 4; k++) $(`play${k}`).onclick = () => play(k);
+
+const LABELS = {real: "the real you", clone: "your AI clone", stock1: "stock AI voice", stock2: "stock AI voice"};
+$("reveal").onclick = async () => {
+  const {order} = await api(`/api/answer/${q}`);
+  order.forEach((kind, k) => {
+    const btn = $(`play${k}`);
+    btn.innerHTML = `Play ${LETTERS[k]}<span>${LABELS[kind]}</span>`;
+    if (kind === "real") btn.classList.add("real");
+  });
+  $("result").textContent = `The real you was ${LETTERS[order.indexOf("real")]}.`;
+};
+
+function mark(ok) {
+  if (scored) return;
+  ok ? right++ : wrong++; scored = true; updateScore();
+}
+$("roomRight").onclick = () => mark(true);
+$("roomWrong").onclick = () => mark(false);
+$("next").onclick = () => { q = (q + 1) % S.sentences.length; showQuestion(); };
+
+refresh().catch(e => msg(e.message));
+</script>
+</body>
+</html>
