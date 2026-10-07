@@ -104,6 +104,9 @@
   .ab button.d:hover { background: #ffefa8; }
   .ab button.real { border-color: var(--green); background: #dff3ea; color: var(--green); }
   .ab button.real span { color: var(--green); }
+  .ab button span.what { font-size: .88rem; font-weight: 700; margin-top: .35rem; color: var(--ink); }
+  .ab button span.detail { font-size: .78rem; font-weight: 400; margin-top: .1rem; color: var(--muted); }
+  .ab button.real span.what { color: var(--green); }
   #result { text-align: center; min-height: 1.6rem; margin-top: .9rem; font-weight: 600; }
   .controls { display: flex; justify-content: center; gap: .6rem; flex-wrap: wrap; margin-top: .9rem; }
   #score { text-align: center; margin: 1rem 0 0; color: var(--muted); font-size: .93rem; }
@@ -384,17 +387,27 @@ async function play(slot) {
 }
 for (let k = 0; k < 4; k++) $(`play${k}`).onclick = () => play(k);
 
-const LABELS = {real: "the real you", clone: "your AI clone", alt1: "AI, another clone of you", alt2: "AI, another clone of you"};
+const span = (a, b) => a === b ? `sentence ${a}` : `sentences ${a}-${b}`;
+function describe(kind) {
+  const n = S.sentences.length;
+  return {
+    real:  ["The real you", "your actual voice"],
+    clone: ["Full AI clone", `heard all ${n} of your recordings`],
+    alt1:  ["Partial AI clone", n > 1 ? `heard only ${span(1, n - 1)}` : "heard your recording"],
+    alt2:  ["Partial AI clone", n > 1 ? `heard only ${span(2, n)}` : "heard your recording"],
+  }[kind];
+}
 $("reveal").onclick = async () => {
   const {order} = await api(`/api/answer/${q}`);
   order.forEach((kind, k) => {
     const btn = $(`play${k}`);
-    btn.innerHTML = `Play ${LETTERS[k]}<span>${LABELS[kind]}</span>`;
+    const [what, detail] = describe(kind);
+    btn.innerHTML = `Play ${LETTERS[k]}<span class="what">${what}</span><span class="detail">${detail}</span>`;
     if (kind === "real") btn.classList.add("real");
   });
   $("result").textContent = order.includes("real")
     ? `The real you was ${LETTERS[order.indexOf("real")]}.`
-    : "All of these are AI. None is the real you.";
+    : "All of these are AI. None is the real you, and the partial clones heard less of you.";
 };
 
 function mark(ok) {
