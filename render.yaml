@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: voice-turing-test
+    runtime: python
+    plan: starter               # a disk needs a paid plan; for a quick demo use "free" and delete the disk block
+    buildCommand: pip install -r requirements.txt
+    startCommand: waitress-serve --host=0.0.0.0 --port=$PORT app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ELEVENLABS_API_KEY
+        sync: false             # you paste the key in the Render dashboard, not here
+    disk:
+      name: voices
+      mountPath: /opt/render/project/src/voices
+      sizeGB: 1
