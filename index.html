@@ -64,10 +64,6 @@
     padding: .7rem .85rem; border: 1px solid var(--line); border-radius: 10px;
     background: #f7fbff;
   }
-  select {
-    font: inherit; color: var(--ink); padding: .2rem .5rem;
-    border: 1px solid var(--line); border-radius: 8px; background: #f7fbff;
-  }
   textarea:focus { outline: 2px solid #9fcdf2; border-color: transparent; }
 
   .row {
@@ -129,8 +125,10 @@
 
   <section class="card">
     <div class="head"><span class="num">1</span><h2>Sentences</h2></div>
-    <p class="note">One per line. Changing these clears your recordings.</p>
-    <textarea id="sentences" rows="5"></textarea>
+    <p class="note">Sentences you will record, one per line. They also teach the clone your voice. Changing them clears your recordings.</p>
+    <textarea id="sentences" rows="3"></textarea>
+    <p class="note" style="margin-top:.9rem">New sentences for the test, one per line. You won't record these: the test plays only AI versions, saying things you never said.</p>
+    <textarea id="extra" rows="3"></textarea>
     <div class="actions"><button id="saveSentences">Save sentences</button></div>
   </section>
 
@@ -138,19 +136,11 @@
     <div class="head"><span class="num">2</span><h2>Record your voice</h2></div>
     <p class="note">Read each sentence naturally. These recordings are also what the clone learns from.</p>
     <div id="recordList"></div>
-    <p id="detected" class="note" style="margin:.7rem 0 0"></p>
   </section>
 
   <section class="card">
     <div class="head"><span class="num">3</span><h2>Clone and generate</h2></div>
     <p class="note">First clone your voice, then generate the fake clips.</p>
-    <p class="note">The two stock AI voices should be:
-      <select id="gender">
-        <option value="auto">matched to my voice</option>
-        <option value="male">male</option>
-        <option value="female">female</option>
-      </select>
-    </p>
     <div class="actions" style="margin-top:0">
       <button id="cloneBtn" class="primary">Clone my voice</button>
       <button id="fakesBtn" class="primary">Generate fake clips</button>
@@ -210,12 +200,11 @@ const post = (path, body) => api(path, {
 
 async function refresh() {
   S = await api("/api/state");
+  clipCache = {};                       // clips may have been regenerated
   if (!S.has_key) msg("No ELEVENLABS_API_KEY found. Add it to the .env file and restart.");
   $("session").textContent = S.session;
-  $("detected").textContent = S.detected
-    ? `Detected voice: ${S.detected.gender} (pitch about ${S.detected.pitch} Hz). Not right? Change it in step 3.`
-    : "";
   $("sentences").value = S.sentences.join("\n");
+  $("extra").value = S.extra.join("\n");
   renderRecordList();
   const ready = S.ready;
   applyButtons();
@@ -253,39 +242,9 @@ async function toWav(blob) {
     const x = Math.max(-1, Math.min(1, v));
     out.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
   });
-  return {blob: new Blob([out], {type: "audio/wav"}), pitch: estimatePitch(data, sr)};
+  return new Blob([out], {type: "audio/wav"});
 }
 
-// Median pitch (Hz) of the voiced parts, by autocorrelation. Men sit near 85-180 Hz, women near 165-255 Hz.
-function estimatePitch(x, sr) {
-  const f = Math.max(1, Math.round(sr / 8000)), rate = sr / f;      // work at about 8 kHz, it's plenty
-  const d = new Float32Array(Math.floor(x.length / f));
-  for (let i = 0; i < d.length; i++) {
-    let t = 0; for (let j = 0; j < f; j++) t += x[i * f + j];
-    d[i] = t / f;
-  }
-  const win = Math.round(rate * 0.04), hop = Math.round(rate * 0.02);
-  const minLag = Math.floor(rate / 400), maxLag = Math.floor(rate / 70);
-  const r = new Float32Array(maxLag + 2), found = [];
-  for (let s = 0; s + win + maxLag + 1 < d.length; s += hop) {
-    let e0 = 0; for (let i = 0; i < win; i++) e0 += d[s + i] * d[s + i];
-    if (e0 / win < 1e-4) continue;                                   // too quiet: pause or breath
-    let best = 0;
-    for (let lag = minLag; lag <= maxLag + 1; lag++) {
-      let c = 0, e1 = 0;
-      for (let i = 0; i < win; i++) { c += d[s + i] * d[s + i + lag]; e1 += d[s + i + lag] ** 2; }
-      r[lag] = c / Math.sqrt(e0 * e1 + 1e-9);
-      if (lag <= maxLag && r[lag] > best) best = r[lag];
-    }
-    if (best < 0.6) continue;                                        // not clearly voiced
-    for (let lag = minLag + 1; lag <= maxLag; lag++) {               // first strong peak avoids octave errors
-      if (r[lag] >= 0.9 * best && r[lag] >= r[lag - 1] && r[lag] >= r[lag + 1]) { found.push(rate / lag); break; }
-    }
-  }
-  if (found.length < 5) return 0;
-  found.sort((a, b) => a - b);
-  return found[Math.floor(found.length / 2)];
-}
 
 let recorder = null;
 async function toggleRecord(i, btn, pill) {
@@ -301,10 +260,8 @@ async function toggleRecord(i, btn, pill) {
     recorder = null;
     pill.textContent = "saving..."; pill.className = "pill";
     try {
-      const {blob: wav, pitch} = await toWav(new Blob(chunks));
-      const form = new FormData();
-      form.append("audio", wav, `real_${i}.wav`);
-      form.append("pitch", pitch);
+      const wav = await toWav(new Blob(chunks));
+      const form = new FormData(); form.append("audio", wav, `real_${i}.wav`);
       await api(`/api/real/${i}`, {method: "POST", body: form});
       await refresh();
     } catch (e) { msg(e.message); }
@@ -345,10 +302,9 @@ function applyButtons() {
   $("delRecBtn").disabled = !S.has_real.some(Boolean);
 }
 $("saveSentences").onclick = e => run(e.target, "Saving...", () =>
-  post("/api/sentences", {sentences: $("sentences").value.split("\n")}));
+  post("/api/sentences", {sentences: $("sentences").value.split("\n"), extra: $("extra").value.split("\n")}));
 $("cloneBtn").onclick = e => run(e.target, "Cloning...", () => post("/api/clone"));
-$("fakesBtn").onclick = e => run(e.target, "Generating...", () =>
-  post("/api/fakes", {gender: $("gender").value}));
+$("fakesBtn").onclick = e => run(e.target, "Generating...", () => post("/api/fakes"));
 $("delCloneBtn").onclick = e => {
   if (confirm("Delete your clone from ElevenLabs and all generated clips? Your recordings are kept."))
     run(e.target, "Deleting...", () => post("/api/delete-clone"));
@@ -359,17 +315,25 @@ $("delRecBtn").onclick = e => {
 };
 
 // ---- the test --------------------------------------------------------
-let q = 0, right = 0, wrong = 0, audio = null, scored = false;
+let q = 0, right = 0, wrong = 0, scored = false;
 const LETTERS = ["A", "B", "C", "D"];
 
 function updateScore() { $("score").textContent = `Room score: ${right} right, ${wrong} wrong`; }
 
+// Recorded sentences come first (4 clips each, one is you). New sentences follow (3 clips, all AI).
+const rounds = () => [...S.sentences, ...S.extra];
+const hasReal = () => q < S.sentences.length;
+
 function showQuestion() {
   $("quizText").innerHTML = "";
   const small = document.createElement("small");
-  small.textContent = `Sentence ${q + 1} of ${S.sentences.length} — which one is the real you?`;
-  $("quizText").append(small, `“${S.sentences[q]}”`);
+  small.textContent = hasReal()
+    ? `Sentence ${q + 1} of ${rounds().length} \u2014 which one is the real you?`
+    : `Sentence ${q + 1} of ${rounds().length} \u2014 you never said this one. All of these are AI. Which sounds most like you?`;
+  $("quizText").append(small, `\u201C${rounds()[q]}\u201D`);
   $("result").textContent = ""; scored = false;
+  $("play3").hidden = !hasReal();
+  $("roomRight").hidden = $("roomWrong").hidden = !hasReal();
   for (let k = 0; k < 4; k++) {
     $(`play${k}`).classList.remove("real");
     $(`play${k}`).innerHTML = `Play ${LETTERS[k]}`;
@@ -377,13 +341,37 @@ function showQuestion() {
   updateScore();
 }
 
-function play(slot) {
-  if (audio) audio.pause();
-  audio = new Audio(`/clip/${q}/${slot}?t=${Date.now()}`); audio.play();
+// Real recordings and ElevenLabs audio come out at different volumes, so every clip is
+// played at the same loudness. That way volume can't give the answer away.
+const TARGET_RMS = 0.08;
+let clipCache = {}, ctx = null, source = null;
+
+async function loadClip(url) {
+  if (!clipCache[url]) {
+    const buffer = await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+    const x = buffer.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < x.length; i++) peak = Math.max(peak, Math.abs(x[i]));
+    let sum = 0, n = 0;                                  // loudness of the speech, ignoring pauses
+    for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) > 0.05 * peak) { sum += x[i] * x[i]; n++; }
+    const rms = Math.sqrt(sum / (n || 1)) || 1e-4;
+    clipCache[url] = {buffer, gain: Math.min(TARGET_RMS / rms, 0.95 / (peak || 1))};
+  }
+  return clipCache[url];
+}
+
+async function play(slot) {
+  if (source) { try { source.stop(); } catch (e) {} }
+  ctx = ctx || new AudioContext();
+  await ctx.resume();
+  const {buffer, gain} = await loadClip(`/clip/${q}/${slot}`);
+  const volume = ctx.createGain(); volume.gain.value = gain;
+  source = ctx.createBufferSource(); source.buffer = buffer;
+  source.connect(volume).connect(ctx.destination); source.start();
 }
 for (let k = 0; k < 4; k++) $(`play${k}`).onclick = () => play(k);
 
-const LABELS = {real: "the real you", clone: "your AI clone", stock1: "stock AI voice", stock2: "stock AI voice"};
+const LABELS = {real: "the real you", clone: "your AI clone", alt1: "AI, another clone of you", alt2: "AI, another clone of you"};
 $("reveal").onclick = async () => {
   const {order} = await api(`/api/answer/${q}`);
   order.forEach((kind, k) => {
@@ -391,7 +379,9 @@ $("reveal").onclick = async () => {
     btn.innerHTML = `Play ${LETTERS[k]}<span>${LABELS[kind]}</span>`;
     if (kind === "real") btn.classList.add("real");
   });
-  $("result").textContent = `The real you was ${LETTERS[order.indexOf("real")]}.`;
+  $("result").textContent = order.includes("real")
+    ? `The real you was ${LETTERS[order.indexOf("real")]}.`
+    : "All of these are AI. None is the real you.";
 };
 
 function mark(ok) {
@@ -400,7 +390,7 @@ function mark(ok) {
 }
 $("roomRight").onclick = () => mark(true);
 $("roomWrong").onclick = () => mark(false);
-$("next").onclick = () => { q = (q + 1) % S.sentences.length; showQuestion(); };
+$("next").onclick = () => { q = (q + 1) % rounds().length; showQuestion(); };
 
 refresh().catch(e => msg(e.message));
 </script>

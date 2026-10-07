@@ -4,7 +4,8 @@ Can you tell your real voice from a cloned one?
 
 Record a few sentences, and the app clones your voice with ElevenLabs. Then
 you hear four clips per sentence, shuffled: your real voice, your clone, and
-two stock AI voices. Guess which one is you.
+two more clones made from part of your recordings. Guess which one is you. Then it plays two new
+sentences you never said, all in AI versions of your voice.
 
 **Try it:** [turing.tmalikov.com](https://turing.tmalikov.com)
 

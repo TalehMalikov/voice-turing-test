@@ -5,10 +5,8 @@ import pytest
 
 import app as A
 
-VOICES = {"voices": [
-    {"voice_id": f"{g[0].upper()}{n}", "category": "premade", "labels": {"gender": g}}
-    for g in ("female", "male") for n in (1, 2)
-]}
+N = len(A.DEFAULT_SENTENCES)   # sentences you record
+E = len(A.DEFAULT_EXTRA)       # new sentences, AI only
 
 
 class Resp:
@@ -26,29 +24,33 @@ class Resp:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    posts = []
+    posts, deleted = [], []
 
     def fake_post(url, **kwargs):
         posts.append(url)
+        if url.endswith("/voices/add"):
+            return Resp({"voice_id": f"v{sum(u.endswith('/voices/add') for u in posts)}"})   # v1, v2, ...
         return Resp()
 
     monkeypatch.setattr(A, "DATA", tmp_path)
-    monkeypatch.setattr(A, "_stock", {})
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
     monkeypatch.setattr(A.requests, "post", fake_post)
-    monkeypatch.setattr(A.requests, "get", lambda *a, **k: Resp(VOICES))
-    monkeypatch.setattr(A.requests, "delete", lambda *a, **k: Resp())
-    return type("Env", (), {"client": staticmethod(A.app.test_client), "posts": posts})
+    monkeypatch.setattr(A.requests, "delete", lambda url, **k: deleted.append(url) or Resp())
+    return type("Env", (), {"client": staticmethod(A.app.test_client), "posts": posts, "deleted": deleted})
 
 
-def record(c, n=5, pitch=120):
+def upload(c, i):
+    return c.post(f"/api/real/{i}", content_type="multipart/form-data",
+                  data={"audio": (io.BytesIO(b"x"), "r.wav")})
+
+
+def record(c, n=N):
     for i in range(n):
-        c.post(f"/api/real/{i}", content_type="multipart/form-data",
-               data={"audio": (io.BytesIO(b"x"), "r.wav"), "pitch": str(pitch)})
+        upload(c, i)
 
 
-def full_run(c, pitch=120):
-    record(c, pitch=pitch)
+def full_run(c):
+    record(c)
     assert c.post("/api/clone").status_code == 200
     assert c.post("/api/fakes").status_code == 200
 
@@ -57,35 +59,46 @@ def test_visitors_are_kept_apart(env):
     a, b = env.client(), env.client()
     record(a)
     record(b, n=1)
-    assert a.get("/api/state").json["has_real"] == [True] * 5
-    assert b.get("/api/state").json["has_real"] == [True] + [False] * 4
+    assert a.get("/api/state").json["has_real"] == [True] * N
+    assert b.get("/api/state").json["has_real"] == [True] + [False] * (N - 1)
 
 
-def test_full_flow_gives_four_shuffled_clips(env):
+def test_recorded_sentences_get_four_clips_and_new_ones_get_three(env):
     c = env.client()
     full_run(c)
     assert c.get("/api/state").json["ready"]
-    assert sorted(c.get("/api/answer/0").json["order"]) == ["clone", "real", "stock1", "stock2"]
+    assert sorted(c.get("/api/answer/0").json["order"]) == ["alt1", "alt2", "clone", "real"]
+    assert sorted(c.get(f"/api/answer/{N}").json["order"]) == ["alt1", "alt2", "clone"]   # first new sentence
     assert all(c.get(f"/clip/0/{slot}").status_code == 200 for slot in range(4))
-    assert c.get("/clip/0/4").status_code == 404
+    assert all(c.get(f"/clip/{N}/{slot}").status_code == 200 for slot in range(3))
+    assert c.get(f"/clip/{N}/3").status_code == 404                                          # no real clip
 
 
-def test_stock_voices_match_the_speaker(env):
-    full_run(env.client(), pitch=215)
-    assert any("F1" in u for u in env.posts) and not any("M1" in u for u in env.posts)
-    env.posts.clear()
-    full_run(env.client(), pitch=115)
-    assert any("M1" in u for u in env.posts) and not any("F1" in u for u in env.posts)
+def test_three_different_clones_speak_and_extras_are_deleted(env):
+    full_run(env.client())
+    speech = [u for u in env.posts if "text-to-speech" in u]
+    assert len(speech) == 3 * (N + E)                                  # 3 AI clips per sentence
+    assert {u.split("/")[-1] for u in speech} == {"v1", "v2", "v3"}    # main clone + two partial clones
+    assert sorted(u.split("/")[-1] for u in env.deleted) == ["v2", "v3"]   # temporary ones removed, main kept
 
 
 def test_limits(env):
     c = env.client()
     assert c.post("/api/sentences", json={"sentences": ["x"] * 9}).status_code == 400
+    assert c.post("/api/sentences", json={"sentences": ["x"], "extra": ["y"] * 5}).status_code == 400
     record(c)
     assert c.post("/api/clone").status_code == 200
     assert c.post("/api/clone").status_code == 400          # one clone at a time
-    assert c.post("/api/real/99", content_type="multipart/form-data",
-                  data={"audio": (io.BytesIO(b"x"), "r.wav")}).status_code == 404
+    assert upload(c, 99).status_code == 404
+
+
+def test_editing_only_the_new_sentences_keeps_recordings(env):
+    c = env.client()
+    full_run(c)
+    sentences = c.get("/api/state").json["sentences"]
+    assert c.post("/api/sentences", json={"sentences": sentences, "extra": ["A brand new line."]}).status_code == 200
+    s = c.get("/api/state").json
+    assert s["has_real"] == [True] * N and s["extra"] == ["A brand new line."] and not s["ready"]
 
 
 def test_forged_cookie_is_ignored(env, tmp_path):

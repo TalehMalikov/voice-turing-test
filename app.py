@@ -31,27 +31,28 @@ SID_RE = re.compile(r"^[a-z]{3,10}-[a-z]{3,10}-[0-9a-f]{16}$")
 ADJECTIVES = ["calm", "bright", "quiet", "brave", "gentle", "swift", "sunny", "clever", "mellow", "lucky"]
 ANIMALS = ["otter", "heron", "fox", "lynx", "finch", "panda", "koala", "gecko", "badger", "robin"]
 
-
-def new_session_id():
-    """A friendly name plus a long random part, e.g. calm-otter-3f2a9c1b7d4e8a05."""
-    return f"{random.choice(ADJECTIVES)}-{random.choice(ANIMALS)}-{secrets.token_hex(8)}"
+MAX_EXTRA = 4                                         # new sentences (AI only) per visitor
 
 DEFAULT_SENTENCES = [
-    "The quick brown fox jumps over the lazy dog.",
-    "I did not expect the results to look like this.",
-    "Could you please send me the notes from yesterday's lecture?",
-    "Honestly, I think the second option is a little better.",
-    "It was a quiet morning, and nothing seemed out of place.",
+    "Honestly, I think the second option is a little better, but I would want to hear what everyone else thinks first.",
+    "Could you please send me the notes from yesterday's lecture, and let me know if anything changes before Friday?",
+    "I am running a little late, so go ahead and start without me, and I will catch up as soon as I can.",
 ]
-FAKES = ["clone", "stock1", "stock2"]   # the three AI clips; "real" is you
-FALLBACK_STOCK = {                       # premade voices, used if the voice list can't be fetched
-    "male": ["pNInz6obpgDQGcFmaJgB", "TxGEqnHWrfWFTfGW9XjX"],       # Adam, Josh
-    "female": ["21m00Tcm4TlvDq8ikWAM", "EXAVITQu4vr4xnSDxMaL"],     # Rachel, Bella
-}
+DEFAULT_EXTRA = [
+    "It was a quiet morning, and nothing seemed out of place until the phone started ringing.",
+    "I will be there in ten minutes, so please save me a seat near the back.",
+]
+
+FAKES = ["clone", "alt1", "alt2"]
 
 app = Flask(__name__, static_folder=None)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)       # so HTTPS is detected behind a proxy
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+
+
+def new_session_id():
+    """A friendly name plus a long random part, e.g. calm-otter-3f2a9c1b7d4e8a05."""
+    return f"{random.choice(ADJECTIVES)}-{random.choice(ANIMALS)}-{secrets.token_hex(8)}"
 
 
 def load_env():
@@ -100,7 +101,7 @@ def session_name():
 
 
 def load_state():
-    s = {"sentences": DEFAULT_SENTENCES, "voice_id": None, "stock": [], "order": {}, "generations": 0, "pitches": {}}
+    s = {"sentences": DEFAULT_SENTENCES, "extra": DEFAULT_EXTRA, "voice_id": None, "order": {}, "generations": 0}
     state_file = g.dir / "state.json"
     if state_file.exists():
         s.update(json.loads(state_file.read_text()))
@@ -130,37 +131,6 @@ def active_clones():
     return n
 
 
-_stock = {}
-
-
-def stock_voices(key, gender):
-    """Two premade ElevenLabs voices of the given gender (looked up once, then remembered)."""
-    if gender in _stock:
-        return _stock[gender]
-    try:
-        r = requests.get(f"{API}/voices", headers={"xi-api-key": key}, timeout=30)
-        voices = [v for v in r.json().get("voices", []) if v.get("category") == "premade"]
-        ids = [v["voice_id"] for v in voices if v.get("labels", {}).get("gender") == gender]
-        if len(ids) >= 2:
-            _stock[gender] = ids[:2]
-            return _stock[gender]
-    except (requests.RequestException, ValueError):
-        pass
-    return FALLBACK_STOCK[gender]
-
-
-FEMALE_PITCH_HZ = 165   # typical speaking pitch: men sit below this, women above
-
-
-def detect_gender(s):
-    """Guess male or female from the median pitch of the visitor's recordings."""
-    pitches = sorted(s["pitches"].values())
-    if not pitches:
-        return None
-    median = pitches[len(pitches) // 2]
-    return {"gender": "female" if median >= FEMALE_PITCH_HZ else "male", "pitch": round(median)}
-
-
 def check(resp):
     """Turn an ElevenLabs error into a readable message."""
     if not resp.ok:
@@ -186,16 +156,17 @@ def index():
 def state():
     s = load_state()
     n = len(s["sentences"])
+    rounds = n + len(s["extra"])        # recorded sentences first, then the new ones
     has_real = [real_path(i).exists() for i in range(n)]
-    has_fake = [all(clip_path(k, i).exists() for k in FAKES) for i in range(n)]
-    ready = all(has_real) and all(has_fake) and all(str(i) in s["order"] for i in range(n))
+    has_fake = [all(clip_path(k, i).exists() for k in FAKES) for i in range(rounds)]
+    ready = all(has_real) and all(has_fake) and all(str(i) in s["order"] for i in range(rounds))
     return jsonify(
         sentences=s["sentences"],
+        extra=s["extra"],
         has_real=has_real,
         has_fake=has_fake,
         ready=ready,
         session=session_name(),
-        detected=detect_gender(s),
         has_voice=bool(s["voice_id"]),
         has_key=bool(os.environ.get("ELEVENLABS_API_KEY")),
     )
@@ -203,19 +174,24 @@ def state():
 
 @app.post("/api/sentences")
 def set_sentences():
-    sentences = [x.strip() for x in request.json["sentences"] if x.strip()]
+    clean = lambda items: [x.strip() for x in items if x.strip()]
+    sentences = clean(request.json["sentences"])
+    extra = clean(request.json.get("extra", []))
     if not sentences:
-        abort(400, "Need at least one sentence.")
+        abort(400, "Need at least one sentence to record.")
     if len(sentences) > MAX_SENTENCES:
-        abort(400, f"Use at most {MAX_SENTENCES} sentences.")
-    if any(len(x) > MAX_SENTENCE_CHARS for x in sentences):
+        abort(400, f"Record at most {MAX_SENTENCES} sentences.")
+    if len(extra) > MAX_EXTRA:
+        abort(400, f"Use at most {MAX_EXTRA} new sentences.")
+    if any(len(x) > MAX_SENTENCE_CHARS for x in sentences + extra):
         abort(400, f"Keep each sentence under {MAX_SENTENCE_CHARS} characters.")
     s = load_state()
-    s["sentences"] = sentences
-    s["order"] = {}
-    s["pitches"] = {}
-    for f in list(g.dir.glob("real_*.wav")) + list(g.dir.glob("*_*.mp3")):
+    if sentences != s["sentences"]:                  # recordings only match the old text
+        for f in g.dir.glob("real_*.wav"):
+            f.unlink()
+    for f in g.dir.glob("*_*.mp3"):                  # generated clips have to be redone
         f.unlink()
+    s.update(sentences=sentences, extra=extra, order={})
     save_state(s)
     return jsonify(ok=True)
 
@@ -227,14 +203,6 @@ def upload_real(i):
         abort(404)
     g.dir.mkdir(parents=True, exist_ok=True)
     request.files["audio"].save(real_path(i))
-    try:                                # pitch in Hz, measured by the browser
-        pitch = float(request.form.get("pitch", 0))
-    except ValueError:
-        pitch = 0
-    if 50 <= pitch <= 500:
-        s["pitches"][str(i)] = round(pitch, 1)
-    else:
-        s["pitches"].pop(str(i), None)
     save_state(s)                       # also refreshes the folder's "last used" time
     return jsonify(ok=True)
 
@@ -252,12 +220,19 @@ def clone():
     if active_clones() >= MAX_CLONES:
         abort(400, "The demo is full right now. Please try again later.")
 
+    s["voice_id"] = create_voice(key, f"turing-test-{session_name()}", files)
+    save_state(s)
+    return jsonify(ok=True)
+
+
+def create_voice(key, name, files):
+    """Upload recordings to ElevenLabs and return the new voice's id."""
     handles = [open(f, "rb") for f in files]
     try:
         resp = requests.post(
             f"{API}/voices/add",
             headers={"xi-api-key": key},
-            data={"name": f"turing-test-{session_name()}"},
+            data={"name": name},
             files=[("files", (f.name, h, "audio/wav")) for f, h in zip(files, handles)],
             timeout=120,
         )
@@ -267,9 +242,7 @@ def clone():
     finally:
         for h in handles:
             h.close()
-    s["voice_id"] = check(resp).json()["voice_id"]
-    save_state(s)
-    return jsonify(ok=True)
+    return check(resp).json()["voice_id"]
 
 
 @app.post("/api/fakes")
@@ -280,23 +253,36 @@ def make_fakes():
         abort(400, "Clone your voice first.")
     if s["generations"] >= MAX_GENERATIONS:
         abort(400, f"You can generate clips {MAX_GENERATIONS} times per visit. Delete your clone to start over.")
-    choice = (request.get_json(silent=True) or {}).get("gender", "auto")
-    if choice not in ("male", "female"):          # "auto": match the detected voice
-        choice = (detect_gender(s) or {}).get("gender", "male")
-    s["stock"] = stock_voices(key, choice)
-    voice_for = {"clone": s["voice_id"], "stock1": s["stock"][0], "stock2": s["stock"][1]}
-    for i, text in enumerate(s["sentences"]):
-        for kind in FAKES:
-            resp = requests.post(
-                f"{API}/text-to-speech/{voice_for[kind]}",
-                headers={"xi-api-key": key},
-                json={"text": text, "model_id": MODEL},
-                timeout=120,
-            )
-            clip_path(kind, i).write_bytes(check(resp).content)
-        order = ["real"] + FAKES
-        random.shuffle(order)
-        s["order"][str(i)] = order      # order[0] is clip A, order[1] is B, ...
+    n = len(s["sentences"])
+    files = [real_path(i) for i in range(n)]
+    if not all(f.exists() for f in files):
+        abort(400, "Record all the sentences first.")
+
+    # Two extra clones, each hearing only part of your recordings (with 1 recording, all of it).
+    subsets = {"alt1": files[:-1] or files, "alt2": files[1:] or files}
+    temp = {}
+    try:
+        for kind, subset in subsets.items():
+            temp[kind] = create_voice(key, f"turing-test-{session_name()}-{kind}", subset)
+        voice_for = {"clone": s["voice_id"], **temp}
+        for i, text in enumerate(s["sentences"] + s["extra"]):
+            for kind in FAKES:
+                resp = requests.post(
+                    f"{API}/text-to-speech/{voice_for[kind]}",
+                    headers={"xi-api-key": key},
+                    json={"text": text, "model_id": MODEL},
+                    timeout=120,
+                )
+                clip_path(kind, i).write_bytes(check(resp).content)
+            order = (["real"] if i < n else []) + FAKES      # new sentences have no real recording
+            random.shuffle(order)
+            s["order"][str(i)] = order      # order[0] is clip A, order[1] is B, ...
+    finally:
+        for voice_id in temp.values():      # always remove the temporary clones
+            try:
+                requests.delete(f"{API}/voices/{voice_id}", headers={"xi-api-key": key}, timeout=60)
+            except requests.RequestException:
+                print("Could not delete temporary voice", voice_id, flush=True)
     s["generations"] += 1
     save_state(s)
     return jsonify(ok=True)
@@ -332,7 +318,7 @@ def delete_clone():
             check(resp)
     for f in g.dir.glob("*_*.mp3"):
         f.unlink()
-    s.update(voice_id=None, stock=[], order={}, generations=0)
+    s.update(voice_id=None, order={}, generations=0)
     save_state(s)
     return jsonify(ok=True)
 
@@ -343,7 +329,6 @@ def delete_recordings():
     for f in g.dir.glob("real_*.wav"):
         f.unlink()
     s = load_state()
-    s["pitches"] = {}
     s["order"] = {}     # the test needs the real clips, so it has to be set up again
     save_state(s)
     return jsonify(ok=True)
